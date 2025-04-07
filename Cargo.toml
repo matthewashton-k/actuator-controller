@@ -1,0 +1,10 @@
+[package]
+name = "actuator_controller"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+crossterm = "0.29.0"
+ratatui = "0.29.0"
+tokio = { version = "1.44.2", features = ["full"] }
+tokio-serial = "5.4.5"
