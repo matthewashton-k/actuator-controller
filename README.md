@@ -6,8 +6,7 @@ I made this project as a way to test the actuator before I have finished the fun
 
 ## Usage
 1. Find where the pico is connected to. Likely it is /dev/ttyACM*
-2. Then edit main.rs to replace this path with the actual path ```let port_path = "/dev/tnt1";```
-3. Execute ```cargo run```
+2. Execute ```cargo run -- <device path>```
 
 
 You should now be able to change the speed and direction of the actuator through the terminal interface.
