@@ -1,4 +1,4 @@
-use std::{io, time::Duration};
+use std::{env::args, io, time::Duration};
 use tokio::{sync::mpsc, time::sleep};
 use tokio_serial::{SerialPortBuilderExt, SerialStream};
 use crossterm::{
@@ -59,11 +59,37 @@ async fn main() -> Result<(), io::Error> {
 
     let (tx, mut rx) = mpsc::channel::<ActuatorCommand>(100);
     let (status_tx, mut status_rx) = mpsc::channel::<String>(100);
+
+    let binding = args().collect::<Vec<String>>();
+    let Some(port_path) = binding.get(1) else {
+        // Restore terminal
+        disable_raw_mode()?;
+        execute!(
+            terminal.backend_mut(),
+            LeaveAlternateScreen,
+            DisableMouseCapture
+        )?;
+        terminal.show_cursor()?;
+        eprintln!("supply path argument. Example: /dev/ttyACM0");
+        return Ok(());
+    };
+
     
-    // REPLACE WITH ACTUAL PATH
-    let port_path = "/dev/ttyACM1";
-    let port = tokio_serial::new(port_path, 9600).open_native_async()
-        .expect("Failed to open serial port");
+    let port = match tokio_serial::new(port_path, 9600).open_native_async() {
+        Ok(p) => p,
+        Err(e) => {
+            // Restore terminal
+            disable_raw_mode()?;
+            execute!(
+                terminal.backend_mut(),
+                LeaveAlternateScreen,
+                DisableMouseCapture
+            )?;
+        terminal.show_cursor()?;
+            eprintln!("Couldn't open {port_path}: {e}");
+            return Ok(());
+        }
+    };
     
     let status_tx_clone = status_tx.clone();
     tokio::spawn(async move {
