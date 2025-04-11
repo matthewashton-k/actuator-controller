@@ -11,3 +11,8 @@ I made this project as a way to test the actuator before I have finished the fun
 
 
 You should now be able to change the speed and direction of the actuator through the terminal interface.
+
+
+## WARNING
+
+I have not actually tested this, or the firmware on the actual pico yet.

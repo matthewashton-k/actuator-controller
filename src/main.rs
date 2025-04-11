@@ -8,7 +8,7 @@ use crossterm::{
 };
 use ratatui::{
     backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout},
+    layout::{Constraint, Layout},
     style::{Color, Modifier, Style},
     widgets::{Block, Borders, Paragraph},
     Terminal,
@@ -61,7 +61,7 @@ async fn main() -> Result<(), io::Error> {
     let (status_tx, mut status_rx) = mpsc::channel::<String>(100);
     
     // REPLACE WITH ACTUAL PATH
-    let port_path = "/dev/tnt1";
+    let port_path = "/dev/ttyACM1";
     let port = tokio_serial::new(port_path, 9600).open_native_async()
         .expect("Failed to open serial port");
     
@@ -77,13 +77,14 @@ async fn main() -> Result<(), io::Error> {
                     } else {
                         let _ = status_tx_clone.send(format!("Set speed to {}", speed)).await;
                     }
+                    let mut buf = [234,4,04];
                 }
-                ActuatorCommand::SetDirection(forward) => {
-                    let bytes = ActuatorCommand::SetDirection(forward).serialize();
+                ActuatorCommand::SetDirection(dir) => {
+                    let bytes = ActuatorCommand::SetDirection(dir).serialize();
                     if let Err(e) = port.try_write(&bytes) {
                         let _ = status_tx_clone.send(format!("Serial error: {}", e)).await;
                     } else {
-                        let dir_str = if forward == commands::Direction::Forward { "forward" } else { "backward" };
+                        let dir_str = if dir == commands::Direction::Forward { "forward" } else { "backward" };
                         let _ = status_tx_clone.send(format!("Set direction to {}", dir_str)).await;
                     }
                 }
@@ -101,7 +102,7 @@ async fn main() -> Result<(), io::Error> {
         
         terminal.draw(|f| {
             let chunks = Layout::default()
-                .direction(Direction::Vertical)
+                .direction(ratatui::layout::Direction::Vertical)
                 .margin(1)
                 .constraints([
                     Constraint::Percentage(25),
@@ -155,7 +156,13 @@ async fn main() -> Result<(), io::Error> {
                     },
                     KeyCode::Left | KeyCode::Right => {
                         app.toggle_direction();
-                        let _ = tx.send(ActuatorCommand::SetDirection(commands::Direction::Forward)).await;
+                        let _ = tx.send(ActuatorCommand::SetDirection(
+                            if app.direction {
+                                commands::Direction::Forward
+                            } else {
+                                commands::Direction::Backward
+                            }
+                        )).await;
                     },
                     KeyCode::Char('+') => {
                         app.increase_speed(5000);
