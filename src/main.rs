@@ -20,18 +20,20 @@ use commands::*;
 
 struct App {
     speed: u32,
-    direction: bool, // true = forward, false = backward
+    direction: commands::Direction, // true = forward, false = backward
     max_speed: u32,
     status_message: String,
+    actuator: commands::Actuator
 }
 
 impl App {
     fn new() -> App {
         App {
             speed: 0,
-            direction: true,
+            direction: commands::Direction::Forward,
             max_speed: 65535, // Adjust based on the motor's capabilities
             status_message: String::from("Ready"),
+            actuator: commands::Actuator::M1
         }
     }
 
@@ -43,8 +45,8 @@ impl App {
         self.speed = self.speed.saturating_sub(amount);
     }
 
-    fn toggle_direction(&mut self) {
-        self.direction = !self.direction;
+    fn set_direction(&mut self, dir: commands::Direction) {
+        self.direction = dir;
     }
 }
 
@@ -96,8 +98,8 @@ async fn main() -> Result<(), io::Error> {
         let mut port = port;
         while let Some(cmd) = rx.recv().await {
             match cmd {
-                ActuatorCommand::SetSpeed(speed) => {
-                    let bytes = ActuatorCommand::SetSpeed(speed).serialize();
+                ActuatorCommand::SetSpeed(speed, actuator) => {
+                    let bytes = ActuatorCommand::SetSpeed(speed, actuator).serialize();
                     if let Err(e) = port.try_write(&bytes) {
                         let _ = status_tx_clone.send(format!("Serial error: {}", e)).await;
                     } else {
@@ -105,8 +107,8 @@ async fn main() -> Result<(), io::Error> {
                     }
                     let mut buf = [234,4,04];
                 }
-                ActuatorCommand::SetDirection(dir) => {
-                    let bytes = ActuatorCommand::SetDirection(dir).serialize();
+                ActuatorCommand::SetDirection(dir, actuator) => {
+                    let bytes = ActuatorCommand::SetDirection(dir, actuator).serialize();
                     if let Err(e) = port.try_write(&bytes) {
                         let _ = status_tx_clone.send(format!("Serial error: {}", e)).await;
                     } else {
@@ -127,6 +129,7 @@ async fn main() -> Result<(), io::Error> {
         }
         
         terminal.draw(|f| {
+            
             let chunks = Layout::default()
                 .direction(ratatui::layout::Direction::Vertical)
                 .margin(1)
@@ -136,9 +139,9 @@ async fn main() -> Result<(), io::Error> {
                     Constraint::Percentage(25),
                     Constraint::Percentage(25),
                 ].as_ref())
-                .split(f.size());
+                .split(f.area());
 
-            let dir_str = if app.direction { "Forward" } else { "Backward" };
+            let dir_str = if app.direction == Direction::Forward {"Forward"} else {"Backward"};
             
             let speed_text = Text::from(format!("Speed: {} / {}", app.speed, app.max_speed));
             let speed_paragraph = Paragraph::new(speed_text)
@@ -150,14 +153,15 @@ async fn main() -> Result<(), io::Error> {
                 .block(Block::default().title("Motor Direction").borders(Borders::ALL));
             f.render_widget(dir_paragraph, chunks[1]);
             
-            let status_text = Text::from(format!("Status: {}", app.status_message));
+            let status_text = Text::from(format!("Status: {} | {:?}", app.status_message, app.actuator));
             let status_paragraph = Paragraph::new(status_text)
                 .block(Block::default().title("Status").borders(Borders::ALL));
+            
             f.render_widget(status_paragraph, chunks[2]);
             
             let help_text = Text::from(
-                "↑/↓: Change speed | ←/→: Change direction | q: Quit\n\
-                 s: Stop motor | +/-: Increase/decrease speed by 5000"
+                "↑/↓: Change speed | ←/→: Switch Direction | q: Quit\n\
+                 s: Stop motor | +/-: Increase/decrease speed by 5000 | a: Change actuator (bucket or lift)"
             );
             let help_paragraph = Paragraph::new(help_text)
                 .block(Block::default().title("Controls").borders(Borders::ALL));
@@ -170,34 +174,52 @@ async fn main() -> Result<(), io::Error> {
                     KeyCode::Char('q') => break,
                     KeyCode::Char('s') => {
                         app.speed = 0;
-                        let _ = tx.send(ActuatorCommand::SetSpeed(0)).await;
+                        let _ = tx.send(ActuatorCommand::SetSpeed(0, app.actuator)).await;
                     },
                     KeyCode::Up => {
                         app.increase_speed(1000);
-                        let _ = tx.send(ActuatorCommand::SetSpeed(app.speed as u16)).await;
+                        let _ = tx.send(ActuatorCommand::SetSpeed(app.speed as u16, app.actuator)).await;
                     },
                     KeyCode::Down => {
                         app.decrease_speed(1000);
-                        let _ = tx.send(ActuatorCommand::SetSpeed(app.speed as u16)).await;
+                        let _ = tx.send(ActuatorCommand::SetSpeed(app.speed as u16, app.actuator)).await;
                     },
-                    KeyCode::Left | KeyCode::Right => {
-                        app.toggle_direction();
+                    KeyCode::Left => {
+                        app.set_direction(commands::Direction::Backward);
                         let _ = tx.send(ActuatorCommand::SetDirection(
-                            if app.direction {
-                                commands::Direction::Forward
-                            } else {
-                                commands::Direction::Backward
-                            }
+                            commands::Direction::Backward,
+                            app.actuator
+                        )).await; 
+                    }
+                    
+                    KeyCode::Right => {
+                        app.set_direction(commands::Direction::Forward);
+                        let _ = tx.send(ActuatorCommand::SetDirection(
+                            commands::Direction::Forward,
+                            app.actuator
                         )).await;
                     },
                     KeyCode::Char('+') => {
                         app.increase_speed(5000);
-                        let _ = tx.send(ActuatorCommand::SetSpeed(app.speed as u16)).await;
+                        let _ = tx.send(ActuatorCommand::SetSpeed(app.speed as u16, app.actuator)).await;
                     },
                     KeyCode::Char('-') => {
                         app.decrease_speed(5000);
-                        let _ = tx.send(ActuatorCommand::SetSpeed(app.speed as u16)).await;
+                        let _ = tx.send(ActuatorCommand::SetSpeed(app.speed as u16, app.actuator)).await;
                     },
+                    KeyCode::Char('a') => {
+                        app.speed = 0;
+                        let _ = tx.send(ActuatorCommand::SetSpeed(
+                            app.speed as u16,
+                            app.actuator
+                        )).await;
+                        if app.actuator == Actuator::M1 {
+                            app.actuator = Actuator::M2;
+                        } else {
+                            app.actuator = Actuator::M1;
+                        }
+                        app.status_message = format!("Switched to {:?}",app.actuator);
+                    }
                     _ => {}
                 }
             }
