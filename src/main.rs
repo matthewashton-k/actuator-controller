@@ -1,5 +1,5 @@
-use std::{env::args, io, time::Duration};
-use tokio::{sync::mpsc, time::sleep};
+use std::{env::args, io::{self, Read}, sync::Arc, time::Duration};
+use tokio::{io::{AsyncBufReadExt, BufStream}, sync::{mpsc, RwLock}, time::sleep};
 use tokio_serial::{SerialPortBuilderExt, SerialStream};
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
@@ -7,12 +7,7 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{
-    backend::CrosstermBackend,
-    layout::{Constraint, Layout},
-    style::{Color, Modifier, Style},
-    widgets::{Block, Borders, Paragraph},
-    Terminal,
-    text::Text,
+    backend::CrosstermBackend, layout::{Constraint, Layout}, style::{Color, Modifier, Style}, text::Text, widgets::{Block, Borders, Cell, Paragraph, Row, Table}, Terminal
 };
 
 mod commands;
@@ -23,7 +18,8 @@ struct App {
     direction: commands::Direction, // true = forward, false = backward
     max_speed: u32,
     status_message: String,
-    actuator: commands::Actuator
+    actuator: commands::Actuator,
+    actuator_len_inches: f64
 }
 
 impl App {
@@ -33,7 +29,8 @@ impl App {
             direction: commands::Direction::Forward,
             max_speed: 65535, // Adjust based on the motor's capabilities
             status_message: String::from("Ready"),
-            actuator: commands::Actuator::M1
+            actuator: commands::Actuator::M1,
+            actuator_len_inches: 0.0
         }
     }
 
@@ -61,6 +58,7 @@ async fn main() -> Result<(), io::Error> {
 
     let (tx, mut rx) = mpsc::channel::<ActuatorCommand>(100);
     let (status_tx, mut status_rx) = mpsc::channel::<String>(100);
+    let (actuator_tx, mut actuator_rx) = mpsc::channel::<f64>(10);
 
     let binding = args().collect::<Vec<String>>();
     let Some(port_path) = binding.get(1) else {
@@ -77,7 +75,7 @@ async fn main() -> Result<(), io::Error> {
     };
 
     
-    let port = match tokio_serial::new(port_path, 9600).open_native_async() {
+    let mut port = match tokio_serial::new(port_path, 9600).open_native_async() {
         Ok(p) => p,
         Err(e) => {
             // Restore terminal
@@ -92,24 +90,36 @@ async fn main() -> Result<(), io::Error> {
             return Ok(());
         }
     };
-    
+
+    let port = Arc::new(RwLock::new(port));
+
     let status_tx_clone = status_tx.clone();
+    let port_clone = Arc::clone(&port);
     tokio::spawn(async move {
-        let mut port = port;
+        loop {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            let mut buf = [0u8;8];
+            let val = port_clone.write().await.read_exact(&mut buf);
+            if let Ok(_) = val {
+                actuator_tx.send(f64::from_le_bytes(buf)).await.unwrap();
+            }
+        }
+    });
+    tokio::spawn(async move {
+        // let mut port = port;
         while let Some(cmd) = rx.recv().await {
             match cmd {
                 ActuatorCommand::SetSpeed(speed, actuator) => {
                     let bytes = ActuatorCommand::SetSpeed(speed, actuator).serialize();
-                    if let Err(e) = port.try_write(&bytes) {
+                    if let Err(e) = port.write().await.try_write(&bytes) {
                         let _ = status_tx_clone.send(format!("Serial error: {}", e)).await;
                     } else {
                         let _ = status_tx_clone.send(format!("Set speed to {}", speed)).await;
                     }
-                    let mut buf = [234,4,04];
                 }
                 ActuatorCommand::SetDirection(dir, actuator) => {
                     let bytes = ActuatorCommand::SetDirection(dir, actuator).serialize();
-                    if let Err(e) = port.try_write(&bytes) {
+                    if let Err(e) = port.write().await.try_write(&bytes) {
                         let _ = status_tx_clone.send(format!("Serial error: {}", e)).await;
                     } else {
                         let dir_str = if dir == commands::Direction::Forward { "forward" } else { "backward" };
@@ -126,6 +136,9 @@ async fn main() -> Result<(), io::Error> {
     loop {
         if let Ok(msg) = status_rx.try_recv() {
             app.status_message = msg;
+        }
+        if let Ok(msg) = actuator_rx.try_recv() {
+            app.actuator_len_inches = msg;
         }
         
         terminal.draw(|f| {
@@ -152,12 +165,17 @@ async fn main() -> Result<(), io::Error> {
             let dir_paragraph = Paragraph::new(dir_text)
                 .block(Block::default().title("Motor Direction").borders(Borders::ALL));
             f.render_widget(dir_paragraph, chunks[1]);
+
+            let status_text = format!("Status: {} | {:?}", app.status_message, app.actuator);
+            let actuator_len_text = format!("Actuator len (in): {}",app.actuator_len_inches);
+
+            let status_table_rows = [
+                Row::new(vec![Cell::new(status_text),Cell::new(actuator_len_text)])
+            ];
+            let status_table = Table::new(status_table_rows, [Constraint::Percentage(50),Constraint::Percentage(50)])
+                .block(Block::default().title("Info").borders(Borders::ALL));
             
-            let status_text = Text::from(format!("Status: {} | {:?}", app.status_message, app.actuator));
-            let status_paragraph = Paragraph::new(status_text)
-                .block(Block::default().title("Status").borders(Borders::ALL));
-            
-            f.render_widget(status_paragraph, chunks[2]);
+            f.render_widget(status_table, chunks[2]);
             
             let help_text = Text::from(
                 "↑/↓: Change speed | ←/→: Switch Direction | q: Quit\n\
