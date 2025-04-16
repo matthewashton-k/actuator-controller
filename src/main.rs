@@ -19,7 +19,7 @@ struct App {
     max_speed: u32,
     status_message: String,
     actuator: commands::Actuator,
-    actuator_len_inches: f64
+    actuator_len_meters: f64
 }
 
 impl App {
@@ -30,7 +30,7 @@ impl App {
             max_speed: 65535, // Adjust based on the motor's capabilities
             status_message: String::from("Ready"),
             actuator: commands::Actuator::M1,
-            actuator_len_inches: 0.0
+            actuator_len_meters: 0.0
         }
     }
 
@@ -138,7 +138,7 @@ async fn main() -> Result<(), io::Error> {
             app.status_message = msg;
         }
         if let Ok(msg) = actuator_rx.try_recv() {
-            app.actuator_len_inches = msg;
+            app.actuator_len_meters = msg;
         }
         
         terminal.draw(|f| {
@@ -167,7 +167,7 @@ async fn main() -> Result<(), io::Error> {
             f.render_widget(dir_paragraph, chunks[1]);
 
             let status_text = format!("Status: {} | {:?}", app.status_message, app.actuator);
-            let actuator_len_text = format!("Actuator len (in): {}",app.actuator_len_inches);
+            let actuator_len_text = format!("Actuator len (m): {}",app.actuator_len_meters);
 
             let status_table_rows = [
                 Row::new(vec![Cell::new(status_text),Cell::new(actuator_len_text)])
